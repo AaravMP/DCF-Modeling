@@ -1,0 +1,163 @@
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import yfinance as yf
+import pandas_datareader.data as web
+from pandas_datareader import data as pdr
+import datetime as dt
+import requests
+from bs4 import BeautifulSoup
+import re
+from datetime import datetime
+from time import mktime
+from matplotlib import style
+style.use('ggplot')
+from scipy.stats import norm
+%matplotlib inline
+import statistics
+import datashader
+import quandl
+import scipy.optimize as sco
+from yahoofinancials import YahooFinancials
+
+#Get Data
+stocks = ['ANGELONE.NS','BAJAJFINSV.NS','CANOPYFIN.BO','ISEC.NS','KARNAVATI.BO','NAYSAA.BO','SKPSEC.BO','VCKCAP.BO','ABBOTINDIA.NS','CIPLA.NS','GODAVARI.BO','GUJTHEM.BO','JBCHEPHARM.NS','LUPIN.NS','SAKAR.NS','VAISHALI.NS','AVANTEL.BO','COFORGE.NS','DSSL.NS','HCLTECH.BO','INFY.NS','LTI.BO','OFSS.NS','SAKSOFT.NS','TCS.NS','TECHM.NS','NXTDIGITAL.NS','PFOCUS.BO','PVR.NS','SUNTV.NS','TIPSINDLTD.NS','TV18BRDCST.NS','WONDERLA.NS','ZEEL.NS']  #VALUATION GROWTH ETC 'GRIN','FANG']     
+print(len(stocks))
+data = pd.DataFrame()
+data = yf.download(stocks, start= datetime(2015,1,1))['Adj Close']
+table = data
+
+def portfolio_annualised_performance(weights, mean_returns, cov_matrix):
+    returns = np.sum(mean_returns * weights) * 252
+    std = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights))) * np.sqrt(252)
+    return std, returns
+
+def random_portfolios(num_portfolios, mean_returns, cov_matrix, risk_free_rate):
+    results = np.zeros((3,num_portfolios))
+    weights_record = []
+    for i in range(num_portfolios):
+        weights = np.random.random(len(stocks))
+        weights /= np.sum(weights)
+        weights_record.append(weights)
+        portfolio_std_dev, portfolio_return = portfolio_annualised_performance(weights, mean_returns, cov_matrix)
+        results[0,i] = portfolio_std_dev
+        results[1,i] = portfolio_return
+        results[2,i] = (portfolio_return - risk_free_rate) / portfolio_std_dev
+    return results, weights_record
+
+#Stats calculation
+returns = table.pct_change()
+
+mean_returns = returns.mean()
+cov_matrix = returns.cov()
+print(mean_returns)
+print(cov_matrix)
+
+weights = [0.0616,0.0840,0.0284,0.0520,0.0367,0.0224,0.0283,0.0166,0.0888,0.0084,0.0063,0.0287,0.0077,0.0573,0.0405,0.0322,0.0368,0.0157,0.0165,0.0675,0.0294,0.0608,0.0244,0.0017,0.0399,0.0040,0.0059,0.0003,0.0273,0.0056,0.0480,0.0009,0.0113,0.0037] #Efficient weights
+print(weights)
+print(len(weights))
+
+simulations = 500000
+time = 252 #in days
+
+mean_matrix = np.full(shape=(time, len(weights)), fill_value=mean_returns)
+mean_matrix = mean_matrix.transpose()
+
+p_sims1 = np.full(shape=(time, simulations),fill_value=0.0)
+
+initial_val = 250000 #Money to be invested
+p_sims = np.full(shape=(time, simulations),fill_value=0.0)
+print(p_sims)
+p_sims[0] = initial_val
+print(p_sims)
+
+for m in range(0, simulations):
+    z = np.random.normal(size=(time, len(weights)))
+    l = np.linalg.cholesky(cov_matrix)
+    daily_returns = mean_matrix + np.inner(l, z)
+    p_sims1[:,m] = np.cumprod(np.inner(weights, daily_returns.T)+1)*initial_val
+
+p_sims = np.append(p_sims, p_sims1, axis = 0)
+print(p_sims)
+p_sims1 = np.delete(p_sims, slice(0, 30), axis=0) # 1, data sets you had before
+p_sims1[0] = initial_val
+
+
+plt.subplots(figsize=(10, 7))
+plt.plot(p_sims1)    
+plt.ylabel('Portfolio Values ($)')
+plt.xlabel('Days')    
+plt.show()
+
+p_sims1 = np.round(p_sims1)
+
+mean = p_sims1[-1].mean()
+print(mean)
+
+median = statistics.median(p_sims1[-1])
+print(median)
+
+std = statistics.stdev(p_sims1[-1])
+print(std)
+
+#VaR
+perc1 = np.percentile(p_sims1[-1], 1)
+print(perc1) #99% sure price will be above 
+
+perc5 = np.percentile(p_sims1[-1], 5)
+print(perc5) #95% sure price will be above 
+
+perc25 = np.percentile(p_sims1[-1], 25)
+print(perc25) #75% sure price will be above
+
+perc75 = np.percentile(p_sims1[-1], 75)
+print(perc75) #75% sure price will be below
+
+perc95 = np.percentile(p_sims1[-1], 95)
+print(perc95) #95% sure price will be below
+
+perc99 = np.percentile(p_sims1[-1], 99)
+print(perc99) #99% sure price will be below 
+
+print('Price will be between $ {}'.format(round(perc1,2)) +' & ${}'.format(round(perc99,2)))
+print('Probability of outcome = 99%')
+
+float1 = p_sims1.tolist()
+
+max1 = np.bincount(float1[-1]).argmax()
+print(max1)
+
+#Conditional VaR #Expected shortfall once passed an event percentile
+def CVaR(returns, alpha=1):
+    """Input: pandas series of returns
+       Output: percentile on return distribution to a given confidence level alpha
+    """
+    if isinstance(returns, pd.Series): # checking if it became a pandas series
+       belowVaR = returns <= perc1    
+       return returns[belowVaR].mean()
+    else:
+       raise TypeError("Expected a pandas data")
+       
+CVaR = initial_val - CVaR(p_sims[-1], alpha=1)    
+print('Mean price at the end of {} days is'.format(time)+' is {}'.format(mean))
+print('Expected Loss under an extreme 1% event = {}'.format(cond_VaR))
+       
+#Touch Probability
+iterations = simulations
+price_list_t = p_sims1.transpose()
+print(len(price_list_t))
+size_t = len(price_list_t) #input printed number
+i=0
+u = 0
+while i < size_t:
+      data_touch = np.where(price_list_t>=325000)        
+      i = i + 1 
+  
+u = np.unique(data_touch[0])  
+print(len(u))      
+print(float(iterations))
+touch = float(len(u))/float(iterations)
+touch = touch * 100
+print('Probability of target touch is {}%'.format(touch))
